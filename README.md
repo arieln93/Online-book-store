@@ -45,3 +45,72 @@ method returns a Future object - from this object the sending Micro-Service can 
 The MicroService is an abstract class that any Micro-Service in the system must extend. The abstract MicroService class is responsible to get and manipulate the singleton MessageBus instance. Derived classes of MicroService should never directly touch the Message-Bus. Instead, they have a set of internal protected wrapping methods they can use. When subscribing to message types, the derived class also supplies a callback function.
 The MicroService stores this callback function together with the type of the message it is related to. The Micro-Service is a Runnable (i.e., suitable to be executed in a thread). The run method implements a message loop. When a new message is taken from the queue, the Micro-Service will invoke the appropriate callback function.
 When the Micro-Service starts executing the run method, it registers itself with the Message-Bus, and then calls the abstract initialize method. The initialize method allows derived classes to perform any required initialization code (e.g., subscribe to messages). Once the initialization code completes, the actual message-loop should start. The Micro-Service should fetch messages from its message queue using the Message-Bus’s awaitMessage method. For each message it should execute the corresponding callback. The MicroService class also contains a terminate method that should signal the message-loop that it should end. Each Micro-Service contains a name given to it in construction time (the name is not guaranteed to be unique).
+
+## Passive Objects (Application)
+This section contains a list of passive classes (a.k.a., non-runnable classes):
+* BookInventoryInfo
+An object which represents information about a single book in the store. It contains the following fields:
+All the callbacks that belong to the micro-service must be executed inside its own message-loop. Registration, Initialization, and Unregistration of the Micro-Service must be executed inside its run method.
+* OrderReceipt
+An object representing a receipt that should be sent to a customer after buying a book (when the customers OrderBookEvent has been completed).
+* Inventory
+This object is implemented as a thread safe singleton. The Inventory object holds a collection of BookInventoryInfo: One for each book the store offers. Only the following methods should be publicly available from the store:
+* DeliveryVehicle
+this object represents a delivery vehicle in the system.
+Contains the method deliver which gets as parameter the address of the customer and the distance from the store and simulates delivery by calling to sleep with the required number of milliseconds for delivery.
+* MoneyRegister
+This object holds a list of receipt issued by the store. This class should be implemented as a thread
+safe singleton.
+* ResourcesHolder
+Holds a collection of DeliveryVehicle.
+* Customer
+Contains id number of the customer, name, address, credit card and more.
+
+### Messages:
+* BookOrderEvent
+- An event that is sent when a client of the store wishes to buy a book. Its expected response
+type is an OrderReceipt. In the case that the order was not completed successfully, null should
+be returned as the event result.
+- Processing: if the book is available in the inventory then the book should be taken, and the
+credit card of the customer should be charged. If there is not enough money in the credit card,
+the order should be discarded, and the book should not be taken from the inventory.
+- Sent by the WebAPI service, the WebAPI waits for this event to complete to get the result.
+The event is sent to a SellingService to handle it.
+Note: there might be several orders of the same customer processed concurrently by
+different micro-services.
+* TickBroadcast
+A broadcast messages that is sent at every passed clock tick. This message must contain the current tick (int).
+* DeliveryEvent
+- An event that is sent when the BookOrderEvent is successfully completed and a delivery is
+required.
+- Processing: should try to acquire a delivery vehicle. If the acquisition succeeds, then should
+call the method deliver of the acquired delivery vehicle and wait until it completes. Otherwise,
+should wait the vehicle becomes available.
+- It is sent to the LogisticsService once the order is successfully completed. The sender does not
+need to wait on the event since it does not return a value.
+Important note: You may create new types of messages as you see fit.
+
+## Active Objects (Micro-Services)
+Micro-services MUTS NOT know each other. A micro-service must not hold a reference to other micro-services, neither get a reference to another micro-service.
+* TimeService (There is only one instance of this service).
+This Micro-Service is our global system timer (handles the clock ticks in the system). It is
+responsible for counting how much clock ticks passed since its initial execution and notify every
+other Micro-Service (that is interested) about it using the TickBroadcast. The TimeService receives
+the number of milliseconds each clock tick takes (speed:int) together with the number of ticks
+before termination (duration:int) as constructor arguments. The TimeService stops sending
+TickBroadcast messages after the duration ends. Be careful that you are not blocking the event
+loop of the timer Micro-Service. You can use the Timer class in java to help you with that. The
+current time always start from 1.
+* APIService:
+This Micro-Service describes one client connected to the application. The APIService expects to
+get the following arguments to its constructor:
+- orderSchedule: List – contains the orders that the client needs to make (every order
+has a corresponding time tick to send the OrderBookEvent). The list is not guaranteed
+to be sorted. The APIService will send the OrderBookEvent on the tick specified on
+the schedule (each order contains one book only, that is, orders on the same tick are
+supposed to be processed by different SellingService (in case there is more than one).
+* SellingService:
+This Micro-Service handles OrderBookEvent. It holds a reference MoneyRegister object.
+* ResourceService: this Micro-Service holds a reference to the ResourcesHolder instance.
+* InventoryService: this Micro-Service holds a reference to the Inventory instance.
+* LogisticsService: this Micro-Service handles the DeliveryEvent. 
